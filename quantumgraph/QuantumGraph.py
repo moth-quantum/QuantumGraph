@@ -3,7 +3,7 @@ from qiskit_aer import AerSimulator
 
 from qiskit.synthesis import OneQubitEulerDecomposer
 from qiskit.synthesis import TwoQubitBasisDecomposer
-from qiskit.circuit.library import CXGate
+from qiskit.circuit.library import CZGate
 
 from pairwise_tomography import pairwise_state_tomography_circuits, PairwiseStateTomographyFitter
 
@@ -30,7 +30,7 @@ for pauli1 in ['I','X','Y','Z']:
 
 class QuantumGraph ():
 
-    def __init__ (self,num_qubits,coupling_map=[],backend=None):
+    def __init__ (self,num_qubits,coupling_map=None,backend=None):
         '''
         Args:
             num_qubits: The number of qubits, and hence the number of nodes in the graph.
@@ -42,12 +42,17 @@ class QuantumGraph ():
 
         self.num_qubits = num_qubits
 
-        # the coupling map consists of pairs [j,k] with the convention j<k
-        self.coupling_map = []
-        for j in range(self.num_qubits-1):
-            for k in range(j+1,self.num_qubits):
-                if ([j,k] in coupling_map) or ([j,k] in coupling_map) or (not coupling_map):
-                    self.coupling_map.append([j,k])
+        # the coupling map consists of pairs (j,k) with the convention j<k
+        if coupling_map is None:
+            self.coupling_map = [
+                (j, k)
+                for j in range(self.num_qubits - 1)
+                for k in range(j + 1, self.num_qubits)
+            ]
+        else:
+            self.coupling_map = [
+                (min(a, b), max(a, b)) for a, b in coupling_map
+            ]
 
         if backend is None:
             self.backend = AerSimulator()
@@ -67,14 +72,10 @@ class QuantumGraph ():
             shots: Number of shots per circuit.
         '''
         if type(self.backend) == ExpectationValue:
-            self.backend = ExpectationValue(self.backend.n,
-                                            k=self.backend.k,
-                                            pairs=self.backend.pairs)
             self.backend.apply_circuit(self.qc)
         else:
-            pairs_list = [tuple(p) for p in self.coupling_map] if self.coupling_map else None
             self.tomo_circs = pairwise_state_tomography_circuits(
-                self.qc, self.qc.qregs[0], pairs_list=pairs_list
+                self.qc, self.qc.qregs[0], pairs_list=self.coupling_map
             )
             result = self.backend.run(
                 transpile(self.tomo_circs, self.backend), shots=shots
@@ -82,7 +83,7 @@ class QuantumGraph ():
             self.tomography = PairwiseStateTomographyFitter(
                 result, self.tomo_circs, self.qc.qregs[0]
             )
-            self.exp = self.tomography.fit(output='expectation', pairs_list=pairs_list)
+            self.exp = self.tomography.fit(output='expectation', pairs_list=self.coupling_map)
 
     def get_bloch(self, qubit):
         '''
@@ -116,12 +117,18 @@ class QuantumGraph ():
         else:
             lo, hi = min(qubit0, qubit1), max(qubit0, qubit1)
             reverse = (lo != qubit0)
-            pair_exp = self.exp[(lo, hi)]
             relationship = {}
-            for pauli in ['XX','XY','XZ','YX','YY','YZ','ZX','ZY','ZZ']:
-                # key (a, b): a = basis for lo, b = basis for hi
-                key = (pauli[1], pauli[0]) if reverse else (pauli[0], pauli[1])
-                relationship[pauli] = pair_exp[key]
+            if (lo, hi) in self.exp:
+                pair_exp = self.exp[(lo, hi)]
+                for pauli in ['XX','XY','XZ','YX','YY','YZ','ZX','ZY','ZZ']:
+                    key = (pauli[1], pauli[0]) if reverse else (pauli[0], pauli[1])
+                    relationship[pauli] = pair_exp[key]
+            else:
+                # Pair outside the coupling map; approximate as product of marginals
+                b0 = self.get_bloch(qubit0)
+                b1 = self.get_bloch(qubit1)
+                for pauli in ['XX','XY','XZ','YX','YY','YZ','ZX','ZY','ZZ']:
+                    relationship[pauli] = b0[pauli[0]] * b1[pauli[1]]
             return relationship
 
     def set_bloch(self, target_expect, qubit, fraction=1, update=True):
@@ -250,6 +257,11 @@ class QuantumGraph ():
                     flips += 1
             return (flips % 2) == 0
 
+        if (min(qubit0, qubit1), max(qubit0, qubit1)) not in self.coupling_map:
+            raise ValueError(
+                f"Pair ({qubit0}, {qubit1}) is not in the coupling map."
+            )
+
         paulis = list(relationships.keys())
         for j in range(len(paulis)):
             for k in range(j + 1, len(paulis)):
@@ -286,7 +298,7 @@ class QuantumGraph ():
             U = pwr(U, fraction)
 
         try:
-            decomposer = TwoQubitBasisDecomposer(CXGate())
+            decomposer = TwoQubitBasisDecomposer(CZGate())
             circuit = decomposer(U)
             gate = circuit.to_instruction()
         except Exception as e:

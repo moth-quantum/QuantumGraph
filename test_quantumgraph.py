@@ -236,6 +236,23 @@ class TestQuantumGraph(QuantumGraphTests, unittest.TestCase):
             rel = g.get_relationship(q0, q1)
             self.assertIn('ZZ', rel)
 
+    def test_get_relationship_outside_coupling_map_uses_marginals(self):
+        """Pairs outside the coupling map return product-of-marginals approximation."""
+        g = QuantumGraph(4, coupling_map=[[0, 1], [2, 3]])
+        # (0, 2) is not in the coupling map; should return product of marginals
+        rel = g.get_relationship(0, 2)
+        b0 = g.get_bloch(0)
+        b2 = g.get_bloch(2)
+        for pauli in ['ZZ', 'XX', 'XZ']:
+            expected = b0[pauli[0]] * b2[pauli[1]]
+            self.assertAlmostEqual(rel[pauli], expected, delta=self.EPS, msg=pauli)
+
+    def test_set_relationship_outside_coupling_map_raises(self):
+        """set_relationship raises ValueError for a pair not in the coupling map."""
+        g = QuantumGraph(4, coupling_map=[[0, 1], [2, 3]])
+        with self.assertRaises(ValueError):
+            g.set_relationship({'ZZ': +1}, 0, 2)
+
 
 # ---------------------------------------------------------------------------
 # ExpectationValue backend — same logical tests, exact results
