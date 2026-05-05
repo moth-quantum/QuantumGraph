@@ -63,24 +63,23 @@ class ExpectationValue():
         qc = transpile(qc,basis_gates=['u3','cz'])
 
         gates = []
-        for gate in qc.data:
-            if gate[0].name=='cz':
-                #q0,q1 = gate[1][0].index,gate[1][1].index
-                #gates.append( ('cz',q0,q1) )
-                q0 = qc.qubits.index(gate[1][0])
-                q1 = qc.qubits.index(gate[1][1])
-                gates.append( ('cz',q0,q1) )
-            elif gate[0].name=='u3':
-                angles = [ float(angle) for angle in gate[0].params ]
-                angles = [angles[2],angles[0],angles[1]]
-                for j,rotation in enumerate(['rz','ry','rz']):
-                    if angles[j]!=0:
-                        gates.append((rotation, angles[j], qc.qubits.index(gate[1][0])))
-            elif gate[0].name in ['rx','ry','rz']:
-                angle = float(gate[0].params[0])
-                gates.append((gate[0].name,angle,qc.qubits.index(gate[1][0])))
+        for instruction in qc.data:
+            op, qargs = instruction.operation, instruction.qubits
+            if op.name == 'cz':
+                q0 = qc.qubits.index(qargs[0])
+                q1 = qc.qubits.index(qargs[1])
+                gates.append(('cz', q0, q1))
+            elif op.name == 'u3':
+                angles = [float(a) for a in op.params]
+                angles = [angles[2], angles[0], angles[1]]
+                for j, rotation in enumerate(['rz', 'ry', 'rz']):
+                    if angles[j] != 0:
+                        gates.append((rotation, angles[j], qc.qubits.index(qargs[0])))
+            elif op.name in ['rx', 'ry', 'rz']:
+                angle = float(op.params[0])
+                gates.append((op.name, angle, qc.qubits.index(qargs[0])))
             else:
-                print(gate[0].name+' not supported.')
+                print(op.name + ' not supported.')
 
         return gates
         

@@ -5,13 +5,7 @@ from qiskit.synthesis import OneQubitEulerDecomposer
 from qiskit.synthesis import TwoQubitBasisDecomposer
 from qiskit.circuit.library import CXGate
 
-from qiskit.quantum_info import partial_trace, DensityMatrix
-
-from qiskit_ibm_runtime import  EstimatorV2 as Estimator
-
-from qiskit_experiments.library.tomography import StateTomography
-from qiskit.result import Result
-from qiskit_experiments.library.tomography import *
+from pairwise_tomography import pairwise_state_tomography_circuits, PairwiseStateTomographyFitter
 
 from quantumgraph.ExpectationValue import ExpectationValue
 
@@ -35,7 +29,7 @@ for pauli1 in ['I','X','Y','Z']:
         matrices[pauli1+pauli2] = kron(matrices[pauli2],matrices[pauli1])
 
 class QuantumGraph ():
-    
+
     def __init__ (self,num_qubits,coupling_map=[],backend=None):
         '''
         Args:
@@ -43,172 +37,137 @@ class QuantumGraph ():
             coupling_map: A list of pairs of qubits, corresponding to edges in the graph.
                 If none is given, a fully connected graph is used.
             backend: The backend on which the graph will be run as a Qiskit backend object.
-            If none is given, a local simulator is used.
+                If none is given, a local simulator is used.
         '''
-        
+
         self.num_qubits = num_qubits
-        
+
         # the coupling map consists of pairs [j,k] with the convention j<k
         self.coupling_map = []
         for j in range(self.num_qubits-1):
             for k in range(j+1,self.num_qubits):
                 if ([j,k] in coupling_map) or ([j,k] in coupling_map) or (not coupling_map):
                     self.coupling_map.append([j,k])
-              
-        # construct all two qubit paulis
-        self.observables = self._get_observables()
 
-        # set backend
-        if backend==None:
+        if backend is None:
             self.backend = AerSimulator()
         else:
             self.backend = backend
-        
-        # create the quantum circuit, and initialize the tomography
+
         self.qc = QuantumCircuit(self.num_qubits)
         self.update_tomography()
-        
-    def _get_observables(self):
-        observables = []
-        for qubit0 in range(self.num_qubits):
-            for pauli in ['X','Y','Z']:
-                full_pauli = ['I']*self.num_qubits
-                full_pauli[qubit0] = pauli
-                obs = ''.join(full_pauli)
-                observables.append(obs)
-            for qubit1 in range(qubit0+1,self.num_qubits):
-                full_pauli = ['I']*self.num_qubits
-                for pauli in ['XX','XY','XZ','YX','YY','YZ','ZX','ZY','ZZ']:
-                    full_pauli[qubit0] = pauli[0]
-                    full_pauli[qubit1] = pauli[1]
-                    obs = ''.join(full_pauli)
-                    observables.append(obs)
-        return observables
 
     def update_tomography(self, shots=8192):
         '''
-        Updates the `tomography` attribute of the `QuantumGraph` object, which contain the two qubit tomography.
-        The update is persomed by running the current circuit on the backend.
-        
-        Args:
-            shots: Number of shots to use.
-        '''   
+        Runs the pairwise tomography circuits for the current state and stores
+        the results. After this call, self.tomo_circs contains the full list of
+        circuits that were executed, and self.tomography is the fitted fitter.
 
-        if type(self.backend)==ExpectationValue:
+        Args:
+            shots: Number of shots per circuit.
+        '''
+        if type(self.backend) == ExpectationValue:
             self.backend = ExpectationValue(self.backend.n,
                                             k=self.backend.k,
                                             pairs=self.backend.pairs)
             self.backend.apply_circuit(self.qc)
         else:
-            estimator = Estimator(mode=self.backend)
-            estimator.options.default_shots = shots
-            job = estimator.run([(transpile(self.qc,self.backend), self.observables)])
-            result = job.result()[0]
-            self.pauli_decomp = {}
-            for obs, val in zip (self.observables, result.data.evs):
-                self.pauli_decomp[obs[::-1]] = val
-    
-    def get_bloch(self,qubit):
+            pairs_list = [tuple(p) for p in self.coupling_map] if self.coupling_map else None
+            self.tomo_circs = pairwise_state_tomography_circuits(
+                self.qc, self.qc.qregs[0], pairs_list=pairs_list
+            )
+            result = self.backend.run(
+                transpile(self.tomo_circs, self.backend), shots=shots
+            ).result()
+            self.tomography = PairwiseStateTomographyFitter(
+                result, self.tomo_circs, self.qc.qregs[0]
+            )
+            self.exp = self.tomography.fit(output='expectation', pairs_list=pairs_list)
+
+    def get_bloch(self, qubit):
         '''
         Returns the X, Y and Z expectation values for the given qubit.
         '''
         if type(self.backend) == ExpectationValue:
-            pauli_decomp = self.backend.pauli_decomp
+            full_pauli = ['I'] * self.num_qubits
+            expect = {}
+            for pauli in ['X', 'Y', 'Z']:
+                full_pauli[qubit] = pauli
+                expect[pauli] = self.backend.pauli_decomp[''.join(full_pauli)]
+                full_pauli[qubit] = 'I'
+            return expect
         else:
-            pauli_decomp = self.pauli_decomp
-        expect = {}
-        full_pauli = ['I'] * self.num_qubits
-        for pauli in ['X', 'Y', 'Z']:
-            full_pauli[qubit] = pauli
-            expect[pauli] = pauli_decomp[''.join(full_pauli)]
-        return expect
-    
+            return self.exp[qubit]
+
     def get_relationship(self, qubit0, qubit1):
         '''
-        Returns the two qubit pauli expectation values for a given pair of qubits.
+        Returns the two-qubit Pauli expectation values for a given pair of qubits.
         '''
         if type(self.backend) == ExpectationValue:
-            pauli_decomp = self.backend.pauli_decomp
+            full_pauli = ['I'] * self.num_qubits
+            relationship = {}
+            for pauli in ['XX','XY','XZ','YX','YY','YZ','ZX','ZY','ZZ']:
+                full_pauli[qubit0] = pauli[0]
+                full_pauli[qubit1] = pauli[1]
+                relationship[pauli] = self.backend.pauli_decomp[''.join(full_pauli)]
+                full_pauli[qubit0] = 'I'
+                full_pauli[qubit1] = 'I'
+            return relationship
         else:
-            pauli_decomp = self.pauli_decomp
-        relationship = {}
-        full_pauli = ['I']*self.num_qubits
-        for pauli in ['XX','XY','XZ','YX','YY','YZ','ZX','ZY','ZZ']:
-            full_pauli[qubit0] = pauli[0]
-            full_pauli[qubit1] = pauli[1]
-            full_pauli_string = ''.join(full_pauli)
-            if full_pauli_string in pauli_decomp:
-                val = pauli_decomp[full_pauli_string]
-            else:
-                # Use product of marginals if not present
-                bloch0 = self.get_bloch(qubit0)
-                bloch1 = self.get_bloch(qubit1)
-                val = bloch0[pauli[0]] * bloch1[pauli[1]]
-            relationship[pauli] = val
-            # Reset for next loop
-            full_pauli[qubit0] = 'I'
-            full_pauli[qubit1] = 'I'
-        return relationship
+            lo, hi = min(qubit0, qubit1), max(qubit0, qubit1)
+            reverse = (lo != qubit0)
+            pair_exp = self.exp[(lo, hi)]
+            relationship = {}
+            for pauli in ['XX','XY','XZ','YX','YY','YZ','ZX','ZY','ZZ']:
+                # key (a, b): a = basis for lo, b = basis for hi
+                key = (pauli[1], pauli[0]) if reverse else (pauli[0], pauli[1])
+                relationship[pauli] = pair_exp[key]
+            return relationship
 
-
-    def set_bloch(self,target_expect,qubit,fraction=1,update=True):
+    def set_bloch(self, target_expect, qubit, fraction=1, update=True):
         '''
         Rotates the given qubit towards the given target state.
-        
-        Args:
-            target_state: Expectation values of the target state.
-            qubit: Qubit on which the operation is applied
-            fraction: fraction of the rotation toward the target state to apply.
-            update: whether to update the tomography after the rotation is added to the circuit.
-        '''
-                    
-        def normalize(expect):
-            '''
-            Returns the given expectation values after normalization.
-            '''
-            R = sqrt( expect['X']**2 + expect['Y']**2 + expect['Z']**2 )
-            return {pauli:expect[pauli]/R for pauli in expect}
-        
-        def get_basis(expect):
-            '''
-            Get the eigenbasis of the density matrix for a the given expectation values.
-            '''
-            normalized_expect = normalize(expect)
-            
-            theta = arccos(normalized_expect['Z'])
-            phi = arctan2(normalized_expect['Y'],normalized_expect['X'])
-            
-            state0 = [cos(theta/2),exp(1j*phi)*sin(theta/2)]
-            state1 = [conj(state0[1]),-conj(state0[0])]
-            
-            return [state0,state1]
 
-        # add in missing zeros
+        Args:
+            target_expect: Expectation values of the target state.
+            qubit: Qubit on which the operation is applied.
+            fraction: Fraction of the rotation toward the target state to apply.
+            update: Whether to update the tomography after the rotation is added to the circuit.
+        '''
+
+        def normalize(expect):
+            R = sqrt(expect['X']**2 + expect['Y']**2 + expect['Z']**2)
+            return {pauli: expect[pauli]/R for pauli in expect}
+
+        def get_basis(expect):
+            normalized_expect = normalize(expect)
+            theta = arccos(normalized_expect['Z'])
+            phi = arctan2(normalized_expect['Y'], normalized_expect['X'])
+            state0 = [cos(theta/2), exp(1j*phi)*sin(theta/2)]
+            state1 = [conj(state0[1]), -conj(state0[0])]
+            return [state0, state1]
+
         for pauli in ['X', 'Y', 'Z']:
             if pauli not in target_expect:
                 target_expect[pauli] = 0
-        
-        # determine the unitary which rotates as close to the target state as possible
+
         current_basis = get_basis(self.get_bloch(qubit))
         target_basis = get_basis(target_expect)
-        U = array([ [0 for _ in range(2)] for _ in range(2) ], dtype=complex)
+        U = array([[0 for _ in range(2)] for _ in range(2)], dtype=complex)
         for i in range(2):
             for j in range(2):
                 for k in range(2):
-                    U[j][k] += target_basis[i][j]*conj(current_basis[i][k])
+                    U[j][k] += target_basis[i][j] * conj(current_basis[i][k])
 
-        # get the unitary for the desired fraction of the rotation
-        if fraction!=1:
+        if fraction != 1:
             U = pwr(U, fraction)
-        
-        # apply the corresponding gate
-        the,phi,lam = OneQubitEulerDecomposer().angles(U)
 
+        the, phi, lam = OneQubitEulerDecomposer().angles(U)
         self.qc.u(the, phi, lam, qubit)
 
         if update:
             self.update_tomography()
-             
+
     def set_relationship(self, relationships, qubit0, qubit1, fraction=1, update=True):
         '''
         Rotates the given pair of qubits towards the given target expectation values.
@@ -249,12 +208,10 @@ class QuantumGraph ():
         def make_vec(projector, seed_vec, ortho_vecs=None, max_tries=100):
             if ortho_vecs is None:
                 ortho_vecs = []
-
             vec = dot(projector, seed_vec)
             for basis_vec in ortho_vecs:
                 vec -= inner(basis_vec, vec) * basis_vec
             new_vec = normalize(vec)
-
             tries = 0
             while not is_valid(new_vec) and tries < max_tries:
                 vec = dot(projector, random_vector())
@@ -262,13 +219,11 @@ class QuantumGraph ():
                     vec -= inner(basis_vec, vec) * basis_vec
                 new_vec = normalize(vec)
                 tries += 1
-
             if not is_valid(new_vec):
                 raise ValueError(
                     "Could not construct another independent vector in the requested projector subspace. "
                     "This usually means the projector rank is too small for the number of vectors requested."
                 )
-
             return new_vec
 
         def get_rho(qubit0, qubit1):
@@ -295,7 +250,6 @@ class QuantumGraph ():
                     flips += 1
             return (flips % 2) == 0
 
-        # Sanity check: all requested Pauli constraints should commute
         paulis = list(relationships.keys())
         for j in range(len(paulis)):
             for k in range(j + 1, len(paulis)):
@@ -304,33 +258,26 @@ class QuantumGraph ():
                         f"Noncommuting relationships supplied: {paulis[j]} and {paulis[k]}"
                     )
 
-        # Get the eigenvectors and eigenvalues of the two-qubit state
         raw_vals, raw_vecs = la.eigh(get_rho(qubit0, qubit1))
         vals = sorted([(val, k) for k, val in enumerate(raw_vals)], reverse=True)
         vecs = [[raw_vecs[j][k] for j in range(4)] for (_, k) in vals]
 
-        # Define projector onto the constraint space
         Pup = np.identity(4, dtype='complex')
         for (pauli, sign) in relationships.items():
             Pup = dot(Pup, (matrices['II'] + sign * matrices[pauli]) / 2)
         Pdown = matrices['II'] - Pup
 
-        # Determine how many basis vectors belong in each sector
         rank_up = projector_rank(Pup)
         rank_down = 4 - rank_up
 
-        # Build a new orthonormal basis adapted to Pup / Pdown
         new_vecs = [[nan for _ in range(4)] for _ in range(4)]
 
-        # Fill the Pup sector first using the most significant eigenvectors as seeds
         for j in range(rank_up):
             new_vecs[j] = make_vec(Pup, vecs[j], ortho_vecs=new_vecs[:j])
 
-        # Fill the Pdown sector with the remaining vectors
         for j in range(rank_up, 4):
             new_vecs[j] = make_vec(Pdown, vecs[j], ortho_vecs=new_vecs[rank_up:j])
 
-        # A unitary is then constructed to rotate the old basis into the new
         U = np.zeros((4, 4), dtype=complex)
         for j in range(4):
             U += outer(new_vecs[j], conj(vecs[j]))

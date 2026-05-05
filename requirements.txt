@@ -1,4 +1,4 @@
-qiskit
-scipy
-qiskit-experiments
+qiskit>=2.0
 qiskit-aer
+scipy
+git+https://github.com/moth-quantum/pairwise-tomography.git
