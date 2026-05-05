@@ -45,29 +45,32 @@ class QuantumGraph ():
         Args:
             num_qubits: The number of qubits, and hence the number of nodes in the graph.
             coupling_map: A list of pairs of qubits, corresponding to edges in the graph.
-                If none is given, a fully connected graph is used.
+                If none is given, the backend's coupling map is used if available,
+                otherwise a fully connected graph is used.
             backend: The backend on which the graph will be run as a Qiskit backend object.
                 If none is given, a local simulator is used.
         '''
 
         self.num_qubits = num_qubits
 
+        if backend is None:
+            self.backend = AerSimulator()
+        else:
+            self.backend = backend
+
         # the coupling map consists of pairs (j,k) with the convention j<k
-        if coupling_map is None:
+        if coupling_map is not None:
+            self.coupling_map = [(min(a, b), max(a, b)) for a, b in coupling_map]
+        elif type(self.backend) == ExpectationValue:
+            self.coupling_map = [(min(a, b), max(a, b)) for a, b in self.backend.coupling_map]
+        elif hasattr(self.backend, 'coupling_map') and self.backend.coupling_map is not None:
+            self.coupling_map = sorted({(min(a, b), max(a, b)) for a, b in self.backend.coupling_map.get_edges()})
+        else:
             self.coupling_map = [
                 (j, k)
                 for j in range(self.num_qubits - 1)
                 for k in range(j + 1, self.num_qubits)
             ]
-        else:
-            self.coupling_map = [
-                (min(a, b), max(a, b)) for a, b in coupling_map
-            ]
-
-        if backend is None:
-            self.backend = AerSimulator()
-        else:
-            self.backend = backend
 
         self.qc = QuantumCircuit(self.num_qubits)
         self.update_tomography()
