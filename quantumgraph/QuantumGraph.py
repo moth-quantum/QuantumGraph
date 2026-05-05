@@ -274,30 +274,10 @@ class QuantumGraph ():
                 rho += rel[pauli] * matrices[pauli]
             return rho / 4
 
-        def commute(pauli1, pauli2):
-            noncommuting_pairs = {
-                ('X', 'Y'), ('Y', 'X'),
-                ('Y', 'Z'), ('Z', 'Y'),
-                ('Z', 'X'), ('X', 'Z')
-            }
-            flips = 0
-            for a, b in zip(pauli1, pauli2):
-                if (a, b) in noncommuting_pairs:
-                    flips += 1
-            return (flips % 2) == 0
-
         if (min(qubit0, qubit1), max(qubit0, qubit1)) not in self.coupling_map:
             raise ValueError(
                 f"Pair ({qubit0}, {qubit1}) is not in the coupling map."
             )
-
-        paulis = list(relationships.keys())
-        for j in range(len(paulis)):
-            for k in range(j + 1, len(paulis)):
-                if not commute(paulis[j], paulis[k]):
-                    raise ValueError(
-                        f"Noncommuting relationships supplied: {paulis[j]} and {paulis[k]}"
-                    )
 
         # Diagonalise inferred RDM with phase convention
         raw_vals, raw_vecs = la.eigh(get_rho(qubit0, qubit1))
@@ -315,8 +295,13 @@ class QuantumGraph ():
             target_rho += val * matrices[pauli]
         target_rho /= 4
 
-        # Diagonalise target RDM and group indices by degenerate eigenvalue
+        # Diagonalise target RDM; clip negative eigenvalues to find closest physical state
         target_vals, target_vecs = la.eigh(target_rho)
+        target_vals = np.maximum(target_vals, 0)
+        total = target_vals.sum()
+        if total > 0:
+            target_vals /= total
+
         tol = 1e-8
         sorted_idx = np.argsort(target_vals)[::-1]
         groups = []

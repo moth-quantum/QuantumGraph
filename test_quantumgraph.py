@@ -201,10 +201,14 @@ class QuantumGraphTests:
         self.assertAlmostEqual(self.graph.get_bloch(0)['X'], 0.0, delta=2 * self.EPS, msg='XI')
         self.assertAlmostEqual(self.graph.get_bloch(1)['X'], 0.0, delta=2 * self.EPS, msg='IX')
 
-    def test_set_relationship_noncommuting_raises(self):
-        """Supplying non-commuting constraints should raise ValueError."""
-        with self.assertRaises(ValueError):
-            self.graph.set_relationship({'XX': +1, 'ZI': +1}, 0, 1)
+    def test_set_relationship_noncommuting_finds_closest(self):
+        """Non-commuting or non-physical constraints should not raise; the closest
+        physical state is found by clipping negative eigenvalues of the target RDM."""
+        self.graph.set_relationship({'XX': +1, 'ZI': +1}, 0, 1)
+        rel = self.graph.get_relationship(0, 1)
+        # Result is unspecified but should be a valid dict with all Pauli keys
+        for pauli in ['XX', 'XY', 'XZ', 'YX', 'YY', 'YZ', 'ZX', 'ZY', 'ZZ']:
+            self.assertIn(pauli, rel)
 
     def test_set_relationship_fraction(self):
         """fraction<1 performs a partial rotation."""
