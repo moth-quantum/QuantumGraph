@@ -7,7 +7,7 @@
 # that they have been changed from the originals.
 #
 # Copyright IBM Quantum 2020
-# Copyright Moth Quantum 2020-2026
+# Copyright Moth Quantum 2025-2026
 
 import numpy as np
 from qiskit import QuantumCircuit, transpile
