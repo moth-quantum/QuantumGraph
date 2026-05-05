@@ -12,7 +12,7 @@
 from setuptools import setup, find_packages
 
 setup(name='quantumgraph',
-      install_requires=['qiskit', 'scipy', 'qiskit-aer', 'git+https://github.com/moth-quantum/pairwise-tomography.git'],
+      install_requires=['qiskit', 'scipy', 'qiskit-aer', 'pairwise-tomography @ git+https://github.com/moth-quantum/pairwise-tomography.git'],
       version='0.0.1',
       packages=['quantumgraph']
 )
