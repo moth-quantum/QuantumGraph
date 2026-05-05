@@ -1,3 +1,14 @@
+# This code is licensed under the Apache License, Version 2.0. You may
+# obtain a copy of this license in the LICENSE.txt file in the root directory
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+#
+# Any modifications or derivative works of this code must retain this
+# copyright notice, and modified files need to carry a notice indicating
+# that they have been changed from the originals.
+#
+# Copyright IBM Quantum 2020
+# Copyright Moth Quantum 2020-2026
+
 import unittest
 import numpy as np
 from qiskit import QuantumCircuit, transpile
@@ -179,6 +190,17 @@ class QuantumGraphTests:
         for pauli, sign in rel.items():
             self.assertAlmostEqual(result[pauli], sign, delta=2 * self.EPS, msg=pauli)
 
+    def test_set_relationship_zz_entangles_x_product_state(self):
+        """ZZ=+1 on |+⟩|+⟩ projects into span{|00⟩,|11⟩}, yielding |Φ+⟩: ZZ=XX=+1, XI=IX=0."""
+        self.graph.set_bloch({'X': 1.0}, 0)
+        self.graph.set_bloch({'X': 1.0}, 1)
+        self.graph.set_relationship({'ZZ': +1}, 0, 1)
+        rel = self.graph.get_relationship(0, 1)
+        self.assertAlmostEqual(rel['ZZ'],  1.0, delta=2 * self.EPS, msg='ZZ')
+        self.assertAlmostEqual(rel['XX'],  1.0, delta=2 * self.EPS, msg='XX')
+        self.assertAlmostEqual(self.graph.get_bloch(0)['X'], 0.0, delta=2 * self.EPS, msg='XI')
+        self.assertAlmostEqual(self.graph.get_bloch(1)['X'], 0.0, delta=2 * self.EPS, msg='IX')
+
     def test_set_relationship_noncommuting_raises(self):
         """Supplying non-commuting constraints should raise ValueError."""
         with self.assertRaises(ValueError):
@@ -223,6 +245,37 @@ class TestQuantumGraph(QuantumGraphTests, unittest.TestCase):
         """A bipartite coupling map triggers the 9-circuit optimisation."""
         g = QuantumGraph(4, coupling_map=[[0, 1], [1, 2], [2, 3], [0, 3]])
         self.assertEqual(len(g.tomo_circs), 9)
+
+    def test_square_lattice_coupling_map(self):
+        """3x3 square lattice: bipartite so 9 circuits; on-map gates work; diagonal uses marginals."""
+        # 0-1-2
+        # | | |
+        # 3-4-5
+        # | | |
+        # 6-7-8
+        nn_pairs = [(0,1),(1,2),(3,4),(4,5),(6,7),(7,8),
+                    (0,3),(1,4),(2,5),(3,6),(4,7),(5,8)]
+        g = QuantumGraph(9, coupling_map=nn_pairs)
+
+        self.assertEqual(len(g.tomo_circs), 9)
+
+        # on-map pair is accessible
+        self.assertIn('ZZ', g.get_relationship(0, 1))
+
+        # set_relationship works for an on-map pair
+        g.set_relationship({'ZZ': +1}, 0, 1)
+        self.assertAlmostEqual(g.get_relationship(0, 1)['ZZ'], 1.0, delta=self.EPS)
+
+        # diagonal pair (0,2) is off-map: get_relationship returns product of marginals
+        rel = g.get_relationship(0, 2)
+        b0, b2 = g.get_bloch(0), g.get_bloch(2)
+        for pauli in ['ZZ', 'XZ', 'ZX']:
+            self.assertAlmostEqual(rel[pauli], b0[pauli[0]] * b2[pauli[1]],
+                                   delta=self.EPS, msg=pauli)
+
+        # set_relationship raises for off-map pair
+        with self.assertRaises(ValueError):
+            g.set_relationship({'ZZ': +1}, 0, 2)
 
     def test_coupling_map_non_bipartite_falls_back(self):
         """A non-bipartite coupling map uses the full coloring scheme."""

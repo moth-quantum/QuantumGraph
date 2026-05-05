@@ -1,3 +1,14 @@
+# This code is licensed under the Apache License, Version 2.0. You may
+# obtain a copy of this license in the LICENSE.txt file in the root directory
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+#
+# Any modifications or derivative works of this code must retain this
+# copyright notice, and modified files need to carry a notice indicating
+# that they have been changed from the originals.
+#
+# Copyright IBM Quantum 2020
+# Copyright Moth Quantum 2020-2026
+
 from qiskit import transpile, QuantumCircuit
 from qiskit_aer import AerSimulator
 
@@ -9,14 +20,13 @@ from pairwise_tomography import pairwise_state_tomography_circuits, PairwiseStat
 
 from quantumgraph.ExpectationValue import ExpectationValue
 
-from numpy import pi, cos, sin, sqrt, exp, arccos, arctan2, conj, array, kron, dot, outer, nan, isnan
+from numpy import sqrt, conj, kron, dot, outer, nan, isnan
 import numpy as np
-from numpy.random import normal
 
 from scipy import linalg as la
 from scipy.linalg import fractional_matrix_power as pwr
 
-from random import random, choice
+from random import random
 
 # define the Pauli matrices in a dictionary
 matrices = {}
@@ -62,7 +72,7 @@ class QuantumGraph ():
         self.qc = QuantumCircuit(self.num_qubits)
         self.update_tomography()
 
-    def update_tomography(self, shots=8192):
+    def update_tomography(self, shots=8192, verbose=False):
         '''
         Runs the pairwise tomography circuits for the current state and stores
         the results. After this call, self.tomo_circs contains the full list of
@@ -70,13 +80,39 @@ class QuantumGraph ():
 
         Args:
             shots: Number of shots per circuit.
+            verbose: If True, print circuit count, depth, 2-qubit gate depth,
+                     gate counts, and the circuits themselves.
         '''
         if type(self.backend) == ExpectationValue:
+            if verbose:
+                print('ExpectationValue backend: exact simulation, no circuits run.')
             self.backend.apply_circuit(self.qc)
+            return []
         else:
             self.tomo_circs = pairwise_state_tomography_circuits(
                 self.qc, self.qc.qregs[0], pairs_list=self.coupling_map
             )
+
+            if verbose:
+                from collections import Counter
+
+                def range_str(vals):
+                    lo, hi = min(vals), max(vals)
+                    return str(lo) if lo == hi else f'{lo}-{hi}'
+
+                depths    = [c.depth() for c in self.tomo_circs]
+                depths_2q = [c.depth(lambda x: x.operation.num_qubits > 1)
+                             for c in self.tomo_circs]
+                ops = Counter()
+                for c in self.tomo_circs:
+                    ops.update(c.count_ops())
+
+                print(f'Circuits: {len(self.tomo_circs)}')
+                print(f'Depth: {range_str(depths)}')
+                print(f'2-qubit gate depth: {range_str(depths_2q)}')
+                print('Gate counts (total across all circuits): ' +
+                      ', '.join(f'{k}: {v}' for k, v in sorted(ops.items())))
+
             result = self.backend.run(
                 transpile(self.tomo_circs, self.backend), shots=shots
             ).result()
@@ -84,6 +120,7 @@ class QuantumGraph ():
                 result, self.tomo_circs, self.qc.qregs[0]
             )
             self.exp = self.tomography.fit(output='expectation', pairs_list=self.coupling_map)
+            return self.tomo_circs
 
     def get_bloch(self, qubit):
         '''
@@ -142,29 +179,25 @@ class QuantumGraph ():
             update: Whether to update the tomography after the rotation is added to the circuit.
         '''
 
-        def normalize(expect):
-            R = sqrt(expect['X']**2 + expect['Y']**2 + expect['Z']**2)
-            return {pauli: expect[pauli]/R for pauli in expect}
+        def bloch_to_rho(expect):
+            x = expect.get('X', 0)
+            y = expect.get('Y', 0)
+            z = expect.get('Z', 0)
+            return np.array([[(1 + z) / 2, (x - 1j * y) / 2],
+                             [(x + 1j * y) / 2, (1 - z) / 2]])
 
-        def get_basis(expect):
-            normalized_expect = normalize(expect)
-            theta = arccos(normalized_expect['Z'])
-            phi = arctan2(normalized_expect['Y'], normalized_expect['X'])
-            state0 = [cos(theta/2), exp(1j*phi)*sin(theta/2)]
-            state1 = [conj(state0[1]), -conj(state0[0])]
-            return [state0, state1]
+        def get_eigenvecs(rho):
+            _, vecs = la.eigh(rho)
+            vecs = vecs[:, ::-1]  # descending eigenvalue order
+            for k in range(vecs.shape[1]):
+                idx = np.argmax(np.abs(vecs[:, k]))
+                vecs[:, k] *= np.exp(-1j * np.angle(vecs[idx, k]))
+            return vecs
 
-        for pauli in ['X', 'Y', 'Z']:
-            if pauli not in target_expect:
-                target_expect[pauli] = 0
+        current_vecs = get_eigenvecs(bloch_to_rho(self.get_bloch(qubit)))
+        target_vecs = get_eigenvecs(bloch_to_rho(target_expect))
 
-        current_basis = get_basis(self.get_bloch(qubit))
-        target_basis = get_basis(target_expect)
-        U = array([[0 for _ in range(2)] for _ in range(2)], dtype=complex)
-        for i in range(2):
-            for j in range(2):
-                for k in range(2):
-                    U[j][k] += target_basis[i][j] * conj(current_basis[i][k])
+        U = target_vecs @ current_vecs.conj().T
 
         if fraction != 1:
             U = pwr(U, fraction)
@@ -207,10 +240,6 @@ class QuantumGraph ():
 
         def is_valid(vec):
             return not any(isnan(vec[j]) for j in range(4))
-
-        def projector_rank(P, tol=1e-8):
-            vals = la.eigvalsh(P)
-            return sum(abs(val) > tol for val in vals)
 
         def make_vec(projector, seed_vec, ortho_vecs=None, max_tries=100):
             if ortho_vecs is None:
@@ -270,25 +299,44 @@ class QuantumGraph ():
                         f"Noncommuting relationships supplied: {paulis[j]} and {paulis[k]}"
                     )
 
+        # Diagonalise inferred RDM with phase convention
         raw_vals, raw_vecs = la.eigh(get_rho(qubit0, qubit1))
-        vals = sorted([(val, k) for k, val in enumerate(raw_vals)], reverse=True)
-        vecs = [[raw_vecs[j][k] for j in range(4)] for (_, k) in vals]
+        order = np.argsort(raw_vals)[::-1]
+        vecs = []
+        for k in order:
+            vec = raw_vecs[:, k].copy()
+            idx = np.argmax(np.abs(vec))
+            vec *= np.exp(-1j * np.angle(vec[idx]))
+            vecs.append(vec)
 
-        Pup = np.identity(4, dtype='complex')
-        for (pauli, sign) in relationships.items():
-            Pup = dot(Pup, (matrices['II'] + sign * matrices[pauli]) / 2)
-        Pdown = matrices['II'] - Pup
+        # Build target RDM from supplied constraints (unspecified terms zero)
+        target_rho = np.identity(4, dtype='complex128')
+        for pauli, val in relationships.items():
+            target_rho += val * matrices[pauli]
+        target_rho /= 4
 
-        rank_up = projector_rank(Pup)
-        rank_down = 4 - rank_up
+        # Diagonalise target RDM and group indices by degenerate eigenvalue
+        target_vals, target_vecs = la.eigh(target_rho)
+        tol = 1e-8
+        sorted_idx = np.argsort(target_vals)[::-1]
+        groups = []
+        i = 0
+        while i < 4:
+            j = i + 1
+            while j < 4 and abs(target_vals[sorted_idx[i]] - target_vals[sorted_idx[j]]) < tol:
+                j += 1
+            groups.append(sorted_idx[i:j])
+            i = j
 
-        new_vecs = [[nan for _ in range(4)] for _ in range(4)]
-
-        for j in range(rank_up):
-            new_vecs[j] = make_vec(Pup, vecs[j], ortho_vecs=new_vecs[:j])
-
-        for j in range(rank_up, 4):
-            new_vecs[j] = make_vec(Pdown, vecs[j], ortho_vecs=new_vecs[rank_up:j])
+        # For each degenerate eigenspace, form its projector and map current eigenstates in
+        new_vecs = [None] * 4
+        current_idx = 0
+        for group in groups:
+            P = sum(np.outer(target_vecs[:, k], target_vecs[:, k].conj()) for k in group)
+            for _ in group:
+                placed = [v for v in new_vecs[:current_idx] if v is not None]
+                new_vecs[current_idx] = make_vec(P, vecs[current_idx], ortho_vecs=placed)
+                current_idx += 1
 
         U = np.zeros((4, 4), dtype=complex)
         for j in range(4):
