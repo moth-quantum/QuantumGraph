@@ -83,36 +83,37 @@ class QuantumGraph ():
             verbose: If True, print circuit count, depth, 2-qubit gate depth,
                      gate counts, and the circuits themselves.
         '''
-        if type(self.backend) == ExpectationValue:
-            if verbose:
+        if verbose:
+            from collections import Counter
+
+            def range_str(vals):
+                lo, hi = min(vals), max(vals)
+                return str(lo) if lo == hi else f'{lo}-{hi}'
+
+            circs = pairwise_state_tomography_circuits(
+                self.qc, self.qc.qregs[0], pairs_list=self.coupling_map
+            )
+            depths    = [c.depth() for c in circs]
+            depths_2q = [c.depth(lambda x: x.operation.num_qubits > 1) for c in circs]
+            ops = Counter()
+            for c in circs:
+                ops.update(c.count_ops())
+
+            print(f'Circuits: {len(circs)}')
+            print(f'Depth: {range_str(depths)}')
+            print(f'2-qubit gate depth: {range_str(depths_2q)}')
+            print('Gate counts (total across all circuits): ' +
+                  ', '.join(f'{k}: {v}' for k, v in sorted(ops.items())))
+            if type(self.backend) == ExpectationValue:
                 print('ExpectationValue backend: exact simulation, no circuits run.')
+
+        if type(self.backend) == ExpectationValue:
             self.backend.apply_circuit(self.qc)
             return []
         else:
             self.tomo_circs = pairwise_state_tomography_circuits(
                 self.qc, self.qc.qregs[0], pairs_list=self.coupling_map
             )
-
-            if verbose:
-                from collections import Counter
-
-                def range_str(vals):
-                    lo, hi = min(vals), max(vals)
-                    return str(lo) if lo == hi else f'{lo}-{hi}'
-
-                depths    = [c.depth() for c in self.tomo_circs]
-                depths_2q = [c.depth(lambda x: x.operation.num_qubits > 1)
-                             for c in self.tomo_circs]
-                ops = Counter()
-                for c in self.tomo_circs:
-                    ops.update(c.count_ops())
-
-                print(f'Circuits: {len(self.tomo_circs)}')
-                print(f'Depth: {range_str(depths)}')
-                print(f'2-qubit gate depth: {range_str(depths_2q)}')
-                print('Gate counts (total across all circuits): ' +
-                      ', '.join(f'{k}: {v}' for k, v in sorted(ops.items())))
-
             result = self.backend.run(
                 transpile(self.tomo_circs, self.backend), shots=shots
             ).result()
