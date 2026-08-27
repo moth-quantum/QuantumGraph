@@ -238,8 +238,7 @@ class QuantumGraph ():
                 return [nan for _ in vec]
 
         def random_vector():
-            vec = np.array([2 * random() - 1 for _ in range(4)], dtype='complex')
-            vec[0] = abs(vec[0])
+            vec = np.random.randn(4) + 1j * np.random.randn(4)
             return normalize(vec)
 
         def is_valid(vec):
