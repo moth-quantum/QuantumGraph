@@ -73,9 +73,10 @@ class QuantumGraph ():
             ]
 
         self.qc = QuantumCircuit(self.num_qubits)
+        self._applied = 0  # gates of self.qc already folded into an ExpectationValue backend
         self.update_tomography()
 
-    def update_tomography(self, shots=8192, verbose=False):
+    def update_tomography(self, shots=8192, verbose=False, incremental=True):
         '''
         Runs the pairwise tomography circuits for the current state and stores
         the results. After this call, self.tomo_circs contains the full list of
@@ -85,6 +86,11 @@ class QuantumGraph ():
             shots: Number of shots per circuit.
             verbose: If True, print circuit count, depth, 2-qubit gate depth,
                      gate counts, and the circuits themselves.
+            incremental: ExpectationValue backend only. If True (default), only
+                     the gates appended to self.qc since the previous call are
+                     applied to the model. If False, the model is reset and the
+                     whole circuit replayed. For k < n the two can differ at the
+                     scale of the model's CZ approximation.
         '''
         if verbose:
             from collections import Counter
@@ -111,7 +117,14 @@ class QuantumGraph ():
                 print('ExpectationValue backend: exact simulation, no circuits run.')
 
         if type(self.backend) == ExpectationValue:
-            self.backend.apply_circuit(self.qc)
+            if incremental and 0 < self._applied <= len(self.qc.data):
+                tail = self.qc.copy_empty_like()
+                for inst in self.qc.data[self._applied:]:
+                    tail.append(inst)
+                self.backend.apply_circuit(tail, reinitialize=False)
+            else:
+                self.backend.apply_circuit(self.qc)
+            self._applied = len(self.qc.data)
             return []
         else:
             self.tomo_circs = pairwise_state_tomography_circuits(

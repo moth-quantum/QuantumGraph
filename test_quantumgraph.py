@@ -23,6 +23,65 @@ from quantumgraph.GraphMitigation import pairwise_mitigation_circuits, PairwiseM
 # ExpectationValue — exact, no shots, fast
 # ---------------------------------------------------------------------------
 
+class TestIncrementalTomography(unittest.TestCase):
+    """update_tomography(incremental=True) must equal a fresh full replay."""
+
+    @staticmethod
+    def _zz_prep(n, edges, steps, incremental, k=2):
+        ev = ExpectationValue(n, k=k, coupling_map=edges)
+        g = QuantumGraph(n, coupling_map=edges, backend=ev)
+        for q in range(n):
+            g.set_bloch({'X': 1}, q, update=False)
+        g.update_tomography(incremental=incremental)
+        for _ in range(steps):
+            for (a, b) in edges:
+                g.set_relationship({'ZZ': -1}, a, b, fraction=0.5, update=False)
+            g.update_tomography(incremental=incremental)
+        return g
+
+    def test_matches_fresh_full_replay_when_model_exact(self):
+        """With k == n every Pauli is tracked, the model is exact, and the
+        incremental state must equal one full replay of the final circuit."""
+        import random
+        n, edges = 4, [(0, 1), (1, 2), (2, 3)]
+        random.seed(0)
+        g = self._zz_prep(n, edges, steps=2, incremental=True, k=n)
+        fresh = ExpectationValue(n, k=n, coupling_map=edges)
+        fresh.apply_circuit(g.qc)  # reinitialize=True: whole circuit from |0>
+        for key, val in fresh.pauli_decomp.items():
+            self.assertAlmostEqual(g.backend.pauli_decomp[key], val, places=10, msg=key)
+
+    def test_approximate_model_stays_close(self):
+        """With k < n the CZ inference is an approximation that depends on how
+        transpile chunks the circuit, so incremental and full replay differ —
+        but only at that approximation's own scale (~1e-2), not O(1)."""
+        import random
+        n, edges = 4, [(0, 1), (1, 2), (2, 3)]
+        random.seed(0)
+        g = self._zz_prep(n, edges, steps=2, incremental=True, k=2)
+        fresh = ExpectationValue(n, k=2, coupling_map=edges)
+        fresh.apply_circuit(g.qc)
+        diff = max(abs(g.backend.pauli_decomp[s] - fresh.pauli_decomp[s]) for s in fresh.pauli_decomp)
+        self.assertLess(diff, 0.05)
+
+    def test_cursor_tracks_circuit(self):
+        n, edges = 3, [(0, 1), (1, 2)]
+        g = self._zz_prep(n, edges, steps=1, incremental=True)
+        self.assertEqual(g._applied, len(g.qc.data))
+        g.set_bloch({'Z': 1}, 0, update=False)
+        self.assertEqual(g._applied, len(g.qc.data) - 1)
+        g.update_tomography()
+        self.assertEqual(g._applied, len(g.qc.data))
+
+    def test_full_replay_still_available(self):
+        import random
+        n, edges = 3, [(0, 1), (1, 2)]
+        random.seed(0)
+        g = self._zz_prep(n, edges, steps=1, incremental=False)
+        self.assertEqual(g._applied, len(g.qc.data))
+        self.assertAlmostEqual(g.get_bloch(0)['X'], g.get_bloch(0)['X'])  # smoke: model readable
+
+
 class TestExpectationValue(unittest.TestCase):
 
     def test_single_qubit_gates(self):
