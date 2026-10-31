@@ -1,0 +1,9 @@
+# Versions with which the results of 31 Oct 2026 were produced (Python 3.13.5)
+qiskit==2.6.1
+qiskit-aer==0.18.2
+numpy==2.5.4
+scipy==1.18.1
+matplotlib==3.11.2
+pillow==13.0.0
+pytest==9.2.0
+pairwise-tomography @ git+https://github.com/moth-quantum/pairwise-tomography.git@dbab12513281bd8ca7828252cf2e98a1a5749761
