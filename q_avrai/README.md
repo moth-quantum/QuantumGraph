@@ -27,6 +27,18 @@ The game rules are those of the 2020 code (on the `CoG` branch of qiskit-communi
 - `PLAN.md` has the plan and the list of places where the 2020 code and paper differ.
 - `runs_setbloch/` holds earlier runs made with the current `set_bloch` rotation rule. They differ from 2020 and are not used for results.
 
+## Skirmishes (an optional variant, not in the 2020 game)
+
+In the 2020 game, nations become entangled only when a city changes hands. That is rare, so the circuits stay easy to simulate classically: a chunkiness of about 2 effective qubits, scored with github.com/moth-quantum/chunkiness. Skirmishes add a small step towards the war state, `set_relationship({'XZ':1,'ZX':1}, fraction=f)`, for every pair of nations between which territory changed hands that round. To run them:
+
+    python experiment.py --civs 7 9 11 --runs 20 --war motte --skirmish scaled --spare_opponents
+
+- The fraction is f = min(1, 0.5 × area moved / πr²), the same scaling the 2020 game uses for its defend and attack steps. `--skirmish_fraction` changes the 0.5, and `--skirmish const` uses a fixed fraction instead.
+- `--spare_opponents` skips skirmishes that involve a frozen opponent. A two-qubit step changes both nations' qubits, so without it the static opponents in the standard-vs-opponent test start to adapt.
+- In standard games (`--opponent_type none`), every pair skirmishes. Chunkiness then reaches n−1, the most possible at these sizes.
+
+The same variant, with the same options, is in the QDrive version of Q_Avrai (the `q_avrai` branch of moth-quantum/QDrive). Skirmishes are off by default, so the defaults still reproduce the paper.
+
 ## Keeping the results paper-like
 
 The defaults reproduce the paper's emulated results: `--rules final`, the 2020 rotation rule (`single='2020'` in `game.py`), all-to-all coupling, 8192 shots, a 256x256 map, r=5, 20 years, and static opponents alternating between the two halves of the Rochester bicolouring. Changing any of these breaks the comparison with the 2020 data.

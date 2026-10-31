@@ -44,7 +44,7 @@ def get_influence(d):
 
 class Game():
 
-    def __init__(self, num_civs, opponent=None, opponent_type=None, war='cz', rules='final', war_fraction=1, single='2020', coupling='all', aer_method=None, seed=None):
+    def __init__(self, num_civs, opponent=None, opponent_type=None, war='cz', rules='final', war_fraction=1, single='2020', coupling='all', aer_method=None, skirmish=None, skirmish_fraction=0.5, skirmish_spare_opponents=False, seed=None):
 
         self.num_civs = num_civs
         self.opponent = opponent if opponent else []
@@ -53,6 +53,17 @@ class Game():
         self.rules = rules
         self.war_fraction = war_fraction
         self.single = single
+        # skirmishes (an extension, not in the 2020 game): a small step towards the war
+        # state for every pair of nations between which territory changed hands this round
+        #   None: off;  'const': fraction skirmish_fraction per pair;
+        #   'scaled': skirmish_fraction * (area moved)/(pi r^2), capped at 1 (recommended,
+        #   with skirmish_fraction=0.5 and skirmish_spare_opponents=True)
+        # skirmish_spare_opponents skips skirmishes involving a frozen opponent on either
+        # side, so that opponents stay static (a two-qubit step changes both qubits)
+        self.skirmish = skirmish
+        self.skirmish_fraction = skirmish_fraction
+        self.skirmish_spare_opponents = skirmish_spare_opponents
+        self.flow = {}
 
         self.points, _, _ = get_points(L)
 
@@ -194,6 +205,7 @@ class Game():
                     if owner[x,y]!=civ and owner[x,y]!=None:
                         loss[owner[x,y]] += 1
                         gain[civ] += 1
+                        self.flow[owner[x,y], civ] = self.flow.get((owner[x,y], civ), 0) + 1
                     owner[x,y] = civ
                     if (x,y) in city_owners:
                         if city_owners[x,y]!=civ:
@@ -258,6 +270,21 @@ class Game():
                             # the final 2020 code uses `loss` rather than `gain` here
                             amount = gain[civ] if self.rules in ['feb2020', 'final_gain'] else loss[civ]
                             self.set_state({'X':0,'Y':0,'Z':1}, civ, fraction=min(1, amount/(np.pi*radius**2)), update=False)
+        if self.skirmish:
+            frozen = self.opponent if self.opponent_type in ['static', 'random'] else []
+            for (loser, winner), area_moved in sorted(self.flow.items()):
+                if loser in frozen:
+                    continue  # frozen opponents get no updates, as for the war step
+                if self.skirmish_spare_opponents and winner in frozen:
+                    continue
+                if transfers.get(loser)==winner or not self.coupled(loser, winner):
+                    continue  # a full war step was taken, or the pair cannot be targeted
+                fraction = self.skirmish_fraction
+                if self.skirmish=='scaled':
+                    fraction = min(1, self.skirmish_fraction*area_moved/(np.pi*radius**2))
+                ai.set_relationship({'XZ':1,'ZX':1}, loser, winner, fraction=fraction, update=False)
+        self.flow = {}
+
         ai.update_tomography()
 
     def get_surplus(self, civ):
@@ -413,7 +440,7 @@ class Game():
         }
 
 
-def run(num_civs, folder, years=20, opponent_type=None, opponent=None, war='cz', rules='final', war_fraction=1, single='2020', coupling='all', aer_method=None, seed=None, verbose=True):
+def run(num_civs, folder, years=20, opponent_type=None, opponent=None, war='cz', rules='final', war_fraction=1, single='2020', coupling='all', aer_method=None, skirmish=None, skirmish_fraction=0.5, skirmish_spare_opponents=False, seed=None, verbose=True):
     '''
     Runs a game and saves it in `folder`: `data.txt` holds one line per year in the 2020
     format (moves, transfers, area, opponent), `data.json` holds the same as JSON, and
@@ -426,7 +453,7 @@ def run(num_civs, folder, years=20, opponent_type=None, opponent=None, war='cz',
 
     os.makedirs(folder, exist_ok=True)
 
-    game = Game(num_civs, opponent=opponent, opponent_type=opponent_type, war=war, rules=rules, war_fraction=war_fraction, single=single, coupling=coupling, aer_method=aer_method, seed=seed)
+    game = Game(num_civs, opponent=opponent, opponent_type=opponent_type, war=war, rules=rules, war_fraction=war_fraction, single=single, coupling=coupling, aer_method=aer_method, skirmish=skirmish, skirmish_fraction=skirmish_fraction, skirmish_spare_opponents=skirmish_spare_opponents, seed=seed)
 
     owners, cities, log = [], [], []
     for year in range(years):
@@ -457,7 +484,7 @@ def run(num_civs, folder, years=20, opponent_type=None, opponent=None, war='cz',
         print()
 
     np.savez_compressed(os.path.join(folder,'maps.npz'), owner=np.array(owners))
-    meta = {'num_civs':num_civs, 'years':years, 'opponent_type':opponent_type, 'war':war, 'rules':rules, 'war_fraction':war_fraction, 'single':single, 'coupling':coupling, 'seed':seed,
+    meta = {'num_civs':num_civs, 'years':years, 'opponent_type':opponent_type, 'war':war, 'rules':rules, 'war_fraction':war_fraction, 'single':single, 'coupling':coupling, 'skirmish':skirmish, 'skirmish_fraction':skirmish_fraction, 'skirmish_spare_opponents':skirmish_spare_opponents, 'seed':seed,
             'L':L, 'radius':radius, 'points':game.points[:num_civs]}
     with open(os.path.join(folder,'cities.json'), 'w') as file:
         json.dump({'meta':meta, 'years':cities}, file)

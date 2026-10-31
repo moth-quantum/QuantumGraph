@@ -27,6 +27,7 @@ TITLES = {
     'feb2020_motte': 'Port, set_relationship',
     'final_cz': 'Port, final 2020 code (cz)',
     'final_motte': 'Port, final 2020 code, set_relationship',
+    'final_motte_skscaled0.5spare': 'QuantumGraph with scaled skirmishes',
     'final_gain_cz': 'Port, final code with gain fix (cz)',
     'final_gain_motte': 'Port, final code with gain fix, set_relationship',
 }
